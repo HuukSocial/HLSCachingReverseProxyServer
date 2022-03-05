@@ -1,5 +1,6 @@
 import GCDWebServer
 import PINCache
+import Foundation
 
 open class HLSCachingReverseProxyServer {
   static let originURLKey = "__hls_origin_url"
@@ -68,14 +69,22 @@ open class HLSCachingReverseProxyServer {
         return completion(GCDWebServerErrorResponse(statusCode: 400))
       }
 
+      
+//      if let cachedData = self.getManifestCachedData(for: originURL) {
+//        return completion(GCDWebServerDataResponse(data: cachedData, contentType: "application/x-mpegurl"))
+//      }
+      
       let task = self.urlSession.dataTask(with: originURL) { data, response, error in
-        guard let data = data, let response = response else {
+        guard let data = data, let response = response, let mimeType = response.mimeType, mimeType == "binary/octet-stream" else {
           return completion(GCDWebServerErrorResponse(statusCode: 500))
         }
+        
+        print("response.mimeType " + originURL.absoluteString + " " + (response.mimeType ?? ""))
 
         let playlistData = self.reverseProxyPlaylist(with: data, forOriginURL: originURL)
-        let contentType = response.mimeType ?? "application/x-mpegurl"
-        completion(GCDWebServerDataResponse(data: playlistData, contentType: contentType))
+        completion(GCDWebServerDataResponse(data: playlistData, contentType: mimeType))
+        
+//        self.saveManifestCacheData(data, for: originURL)
       }
 
       task.resume()
@@ -92,7 +101,7 @@ open class HLSCachingReverseProxyServer {
         return completion(GCDWebServerErrorResponse(statusCode: 400))
       }
 
-      if let cachedData = self.cachedData(for: originURL) {
+      if let cachedData = self.getSegmentCachedData(for: originURL) {
         return completion(GCDWebServerDataResponse(data: cachedData, contentType: "video/mp2t"))
       }
 
@@ -104,7 +113,7 @@ open class HLSCachingReverseProxyServer {
         let contentType = response.mimeType ?? "video/mp2t"
         completion(GCDWebServerDataResponse(data: data, contentType: contentType))
 
-        self.saveCacheData(data, for: originURL)
+        self.saveSegmentCacheData(data, for: originURL)
       }
 
       task.resume()
@@ -178,17 +187,51 @@ open class HLSCachingReverseProxyServer {
 
   // MARK: Caching
 
-  private func cachedData(for resourceURL: URL) -> Data? {
+  private func getSegmentCachedData(for resourceURL: URL) -> Data? {
+    
+    if let hdURL = getHDFilePath(for: resourceURL) {
+      let key = self.cacheKey(for: hdURL)
+      if let data = self.cache.object(forKey: key) as? Data {
+        print("Cached Segment:>>> " + hdURL.path)
+        return data
+      }
+    }
+    
+    print("Cached Segment:>>> " + resourceURL.path)
     let key = self.cacheKey(for: resourceURL)
     return self.cache.object(forKey: key) as? Data
   }
 
-  private func saveCacheData(_ data: Data, for resourceURL: URL) {
+  private func saveSegmentCacheData(_ data: Data, for resourceURL: URL) {
+    print("Cached Segment:<<< " + resourceURL.path)
     let key = self.cacheKey(for: resourceURL)
     self.cache.setObject(data, forKey: key)
   }
+  
+//  private func getManifestCachedData(for resourceURL: URL) -> Data? {
+//    print("Cached Manifest:>>> " + resourceURL.path)
+//    let key = self.cacheKey(for: resourceURL)
+//    let data = self.cache.object(forKey: key) as? Data
+//    return data
+//  }
+//
+//  private func saveManifestCacheData(_ data: Data, for resourceURL: URL) {
+//    print("Cached Manifest:<<< " + resourceURL.path)
+//    let key = self.cacheKey(for: resourceURL)
+//    self.cache.setObject(data, forKey: key)
+//  }
 
   private func cacheKey(for resourceURL: URL) -> String {
     return resourceURL.absoluteString.data(using: .utf8)!.base64EncodedString()
+  }
+  
+  private func getHDFilePath(for resourceURL: URL) -> URL? {
+    var fileNameComponents = resourceURL.lastPathComponent.split(separator: "_").map { value in
+      return String(value)
+    }
+    fileNameComponents[1] = "1"
+    let hdFileName = fileNameComponents.joined(separator: "_")
+    let absoluteHDPath = resourceURL.absoluteString.replacingOccurrences(of: resourceURL.lastPathComponent, with: hdFileName)
+    return URL(string: absoluteHDPath)
   }
 }
